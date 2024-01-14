@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"image/color"
 	"log"
@@ -9,15 +8,20 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/pkg/errors"
 )
 
 func main() {
 	g := newGame(7, 6)
+	err := g.loadImages()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	ebiten.SetWindowSize(g.screenWidth(), g.screenHeight())
 	ebiten.SetWindowTitle("4 Gewinnt")
 
-	err := ebiten.RunGame(g)
+	err = ebiten.RunGame(g)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -116,6 +120,8 @@ type Game struct {
 
 	columns, rows int
 	blockSize     int
+
+	images map[string]*ebiten.Image
 }
 
 func newGame(columns, rows int) *Game {
@@ -123,6 +129,7 @@ func newGame(columns, rows int) *Game {
 		blockSize:    90,
 		activePlayer: 1,
 		pegs:         [][]*peg{},
+		images:       map[string]*ebiten.Image{},
 	}
 
 	g.columns = columns
@@ -133,6 +140,32 @@ func newGame(columns, rows int) *Game {
 	g.reset()
 
 	return g
+}
+
+func (g *Game) loadImages() error {
+	empty, _, err := ebitenutil.NewImageFromFile("empty.png")
+	if err != nil {
+		return errors.Wrap(err, "failed to load empty.png")
+	}
+	red, _, err := ebitenutil.NewImageFromFile("red.png")
+	if err != nil {
+		return errors.Wrap(err, "failed to load red.png")
+	}
+	yellow, _, err := ebitenutil.NewImageFromFile("yellow.png")
+	if err != nil {
+		return errors.Wrap(err, "failed to load yellow.png")
+	}
+	pink, _, err := ebitenutil.NewImageFromFile("pink.png")
+	if err != nil {
+		return errors.Wrap(err, "failed to load yellow.png")
+	}
+
+	g.images["empty"] = empty
+	g.images["red"] = red
+	g.images["yellow"] = yellow
+	g.images["pink"] = pink
+
+	return nil
 }
 
 func (g *Game) Update() error {
@@ -159,8 +192,8 @@ func (g *Game) Update() error {
 
 	if inpututil.IsMouseButtonJustReleased(leftMouseButton) {
 		x, y := ebiten.CursorPosition()
-		col, err := g.positionToColumn(x, y)
-		if err == errOutOfBounds {
+		col, ok := g.positionToColumn(x, y)
+		if !ok {
 			col = -1
 		}
 		fmt.Printf("left click x=%v y=%v col=%v\n", x, y, col)
@@ -321,17 +354,15 @@ func (g *Game) finishTurn() {
 	fmt.Printf("now it's %v's turn\n", g.activePlayer)
 }
 
-var errOutOfBounds = errors.New("out of bounds")
-
-func (g *Game) positionToColumn(x, y int) (int, error) {
+func (g *Game) positionToColumn(x, y int) (int, bool) {
 	if x > g.screenWidth() || x < 0 {
-		return 0, errOutOfBounds
+		return 0, false
 	}
 	if y > g.screenHeight() || y < 0 {
-		return 0, errOutOfBounds
+		return 0, false
 	}
 
-	return x / g.blockSize, nil
+	return x / g.blockSize, true
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -353,13 +384,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 
 			switch {
 			case p == nil:
-				screen.DrawImage(inactivePeg, op)
+				screen.DrawImage(g.images["empty"], op)
 			case len(g.winningLine) > 0 && p.isIn(g.winningLine):
-				screen.DrawImage(winningPeg, op)
+				screen.DrawImage(g.images["pink"], op)
 			case p.player == 1:
-				screen.DrawImage(player1Peg, op)
+				screen.DrawImage(g.images["yellow"], op)
 			case p.player == 2:
-				screen.DrawImage(player2Peg, op)
+				screen.DrawImage(g.images["red"], op)
 			default:
 				panic("asihoetnasiohetn")
 			}

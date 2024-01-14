@@ -4,6 +4,7 @@ go 1.21.5
 
 require (
 	github.com/hajimehoshi/ebiten/v2 v2.6.3
+	github.com/pkg/errors v0.9.1
 	github.com/test-go/testify v1.1.4
 )
 
