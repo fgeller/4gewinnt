@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/audio"
+	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/pkg/errors"
@@ -14,6 +17,10 @@ import (
 func main() {
 	g := newGame(7, 6)
 	err := g.loadImages()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = g.loadSounds()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -54,8 +61,8 @@ func (p *peg) isIn(others []*peg) bool {
 	return false
 }
 
-func (p *peg) neighbor(direction int) *peg {
-	nextX, nextY, onBoard := p.g.nextPos(p.x, p.y, direction)
+func (p *peg) neighbor(d direction) *peg {
+	nextX, nextY, onBoard := p.g.nextPos(p.x, p.y, d)
 	if !onBoard {
 		return nil
 	}
@@ -63,7 +70,7 @@ func (p *peg) neighbor(direction int) *peg {
 }
 
 func (p *peg) hasFour() ([]*peg, bool) {
-	checkLine := func(directionA, directionB int) ([]*peg, bool) {
+	checkLine := func(directionA, directionB direction) ([]*peg, bool) {
 		streak := []*peg{p}
 		next := p
 		for i := 0; i < 4; i++ {
@@ -122,6 +129,7 @@ type Game struct {
 	blockSize     int
 
 	images map[string]*ebiten.Image
+	sounds map[string]*audio.Player
 }
 
 func newGame(columns, rows int) *Game {
@@ -130,6 +138,7 @@ func newGame(columns, rows int) *Game {
 		activePlayer: 1,
 		pegs:         [][]*peg{},
 		images:       map[string]*ebiten.Image{},
+		sounds:       map[string]*audio.Player{},
 	}
 
 	g.columns = columns
@@ -164,6 +173,41 @@ func (g *Game) loadImages() error {
 	g.images["red"] = red
 	g.images["yellow"] = yellow
 	g.images["pink"] = pink
+
+	return nil
+}
+
+func (g *Game) loadSounds() error {
+	audioContext := audio.NewContext(48_000)
+
+	clickFile, err := os.Open("click.mp3")
+	if err != nil {
+		return errors.Wrap(err, "failed to open click.mp3")
+	}
+	clickStream, err := mp3.DecodeWithoutResampling(clickFile)
+	if err != nil {
+		return errors.Wrap(err, "failed to load click.mp3")
+	}
+	click, err := audioContext.NewPlayer(clickStream)
+	if err != nil {
+		return errors.Wrap(err, "failed to create click player")
+	}
+
+	cheerFile, err := os.Open("cheer.mp3")
+	if err != nil {
+		return errors.Wrap(err, "failed to open cheer.mp3")
+	}
+	cheerStream, err := mp3.DecodeWithoutResampling(cheerFile)
+	if err != nil {
+		return errors.Wrap(err, "failed to load cheer.mp3")
+	}
+	cheer, err := audioContext.NewPlayer(cheerStream)
+	if err != nil {
+		return errors.Wrap(err, "failed to create cheer player")
+	}
+
+	g.sounds["click"] = click
+	g.sounds["cheer"] = cheer
 
 	return nil
 }
@@ -239,6 +283,7 @@ func (g *Game) addPeg(column int) *peg {
 	rows := g.pegs[column]
 	for i := len(rows) - 1; i >= 0; i-- {
 		if rows[i] == nil {
+			g.playSound("click")
 			p := &peg{g: g, player: g.activePlayer, x: column, y: i}
 			rows[i] = p
 			return p
@@ -247,6 +292,23 @@ func (g *Game) addPeg(column int) *peg {
 	fmt.Printf("column %v is already filled", column)
 	return nil
 }
+
+func (g *Game) playSound(n string) {
+	s, ok := g.sounds[n]
+	if !ok {
+		fmt.Printf("unknown sound name %#v\n", n)
+		return
+	}
+	fmt.Printf("n=%v play()\n", n)
+	err := s.Rewind()
+	if err != nil {
+		fmt.Printf("error rewinding sound n=%v err=%v\n", n, err)
+		return
+	}
+	s.Play() // go p.Play() ?
+}
+
+type direction int
 
 const (
 	North = iota
@@ -259,10 +321,10 @@ const (
 	NorthWest
 )
 
-var directions = []int{North, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest}
+var directions = []direction{North, NorthEast, East, SouthEast, South, SouthWest, West, NorthWest}
 
-func (g *Game) nextPos(currentX, currentY int, direction int) (int, int, bool) {
-	switch direction {
+func (g *Game) nextPos(currentX, currentY int, d direction) (int, int, bool) {
+	switch d {
 	case North:
 		if currentY == 0 {
 			return 0, 0, false
@@ -343,6 +405,7 @@ func (g *Game) finishTurn() {
 	winner, ok := g.checkForWinner()
 	if ok {
 		g.winner = winner
+		g.playSound("cheer")
 		return
 	}
 
