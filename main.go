@@ -26,6 +26,9 @@ var clickMp3 []byte
 //go:embed cheer.mp3
 var cheerMp3 []byte
 
+//go:embed uhoh.mp3
+var uhohMp3 []byte
+
 func main() {
 	g := newGame(7, 6)
 	err := g.loadImages()
@@ -86,6 +89,7 @@ func (p *peg) neighbor(d direction) *peg {
 }
 
 func (p *peg) hasFour() ([]*peg, bool) {
+	var maxStreak []*peg
 	checkLine := func(directionA, directionB direction) ([]*peg, bool) {
 		streak := []*peg{p}
 		next := p
@@ -105,6 +109,9 @@ func (p *peg) hasFour() ([]*peg, bool) {
 			streak = append(streak, next)
 		}
 
+		if len(streak) > len(maxStreak) {
+			maxStreak = streak
+		}
 		return streak, len(streak) >= 4
 	}
 
@@ -129,7 +136,7 @@ func (p *peg) hasFour() ([]*peg, bool) {
 		return line, ok
 	}
 
-	return nil, false
+	return maxStreak, false
 }
 
 type button struct {
@@ -160,6 +167,7 @@ type Game struct {
 	activePlayer int
 	winner       int
 	winningLine  []*peg
+	uhohCount    int
 
 	isStart bool
 
@@ -264,8 +272,18 @@ func (g *Game) loadSounds() error {
 		return errors.Wrap(err, "failed to create cheer player")
 	}
 
+	uhohStream, err := mp3.DecodeWithoutResampling(bytes.NewReader(uhohMp3))
+	if err != nil {
+		return errors.Wrap(err, "failed to load uhoh.mp3")
+	}
+	uhoh, err := audioContext.NewPlayer(uhohStream)
+	if err != nil {
+		return errors.Wrap(err, "failed to create uhoh player")
+	}
+
 	g.sounds["click"] = click
 	g.sounds["cheer"] = cheer
+	g.sounds["uhoh"] = uhoh
 
 	return nil
 }
@@ -330,6 +348,7 @@ func (g *Game) reset() {
 	g.isStart = true
 	g.winner = 0
 	g.winningLine = []*peg{}
+	g.uhohCount = 0
 	g.activeButton = nil
 	g.activeMessage = nil
 	g.pegs = [][]*peg{}
@@ -455,18 +474,23 @@ func (g *Game) nextPos(currentX, currentY int, d direction) (int, int, bool) {
 
 func (g *Game) checkForWinner() (int, bool) {
 	pegCount := 0
+	uhohCount := 0
 	for _, c := range g.pegs {
 		for _, p := range c {
 			if p == nil {
 				continue
 			}
 			pegCount++
-			winningLine, ok := p.hasFour()
+			streak, ok := p.hasFour()
 			if ok {
-				g.winningLine = winningLine
+				g.winningLine = streak
 				fmt.Printf("found winning line, player %v won\n", g.activePlayer)
 				printLine(g.winningLine)
 				return g.activePlayer, true
+			}
+
+			if len(streak) == 3 {
+				uhohCount += 1
 			}
 		}
 	}
@@ -474,6 +498,11 @@ func (g *Game) checkForWinner() (int, bool) {
 	if pegCount == g.columns*g.rows {
 		fmt.Println("draw!")
 		return 3, true
+	}
+
+	if uhohCount > g.uhohCount {
+		g.uhohCount = uhohCount
+		g.playSound("uhoh")
 	}
 
 	return 0, false
