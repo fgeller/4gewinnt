@@ -10,8 +10,13 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	"github.com/hajimehoshi/ebiten/v2/audio/mp3"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/examples/resources/fonts"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text"
+	"github.com/hajimehoshi/ebiten/v2/vector"
 	"github.com/pkg/errors"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/opentype"
 )
 
 func main() {
@@ -21,6 +26,10 @@ func main() {
 		log.Fatal(err)
 	}
 	err = g.loadSounds()
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = g.loadFonts()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -130,6 +139,7 @@ type Game struct {
 
 	images map[string]*ebiten.Image
 	sounds map[string]*audio.Player
+	fonts  map[string]font.Face
 }
 
 func newGame(columns, rows int) *Game {
@@ -139,6 +149,7 @@ func newGame(columns, rows int) *Game {
 		pegs:         [][]*peg{},
 		images:       map[string]*ebiten.Image{},
 		sounds:       map[string]*audio.Player{},
+		fonts:        map[string]font.Face{},
 	}
 
 	g.columns = columns
@@ -173,6 +184,29 @@ func (g *Game) loadImages() error {
 	g.images["red"] = red
 	g.images["yellow"] = yellow
 	g.images["pink"] = pink
+
+	return nil
+}
+
+func (g *Game) loadFonts() error {
+	trueType, err := opentype.Parse(fonts.PressStart2P_ttf)
+	if err != nil {
+		return errors.Wrap(err, "failed to parse font")
+	}
+
+	arcadeFont, err := opentype.NewFace(
+		trueType,
+		&opentype.FaceOptions{
+			Size:    8,
+			DPI:     72,
+			Hinting: font.HintingFull,
+		},
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to create new face")
+	}
+
+	g.fonts["arcade"] = arcadeFont
 
 	return nil
 }
@@ -391,7 +425,7 @@ func (g *Game) checkForWinner() (int, bool) {
 			winningLine, ok := p.hasFour()
 			if ok {
 				g.winningLine = winningLine
-				fmt.Printf("found winning line\n")
+				fmt.Printf("found winning line, player %v won\n", g.activePlayer)
 				printLine(g.winningLine)
 				return g.activePlayer, true
 			}
@@ -429,15 +463,6 @@ func (g *Game) positionToColumn(x, y int) (int, bool) {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
-	inactivePeg := ebiten.NewImage(g.blockSize, g.blockSize)
-	inactivePeg.Fill(color.RGBA{0, 0, 0xff, 0xff})
-	player1Peg := ebiten.NewImage(g.blockSize, g.blockSize)
-	player1Peg.Fill(color.RGBA{0xff, 0, 0, 0xff})
-	player2Peg := ebiten.NewImage(g.blockSize, g.blockSize)
-	player2Peg.Fill(color.RGBA{0xff, 0xff, 0, 0xff})
-	winningPeg := ebiten.NewImage(g.blockSize, g.blockSize)
-	winningPeg.Fill(color.RGBA{0xff, 0xc0, 0xcb, 0xff})
-
 	for ci, col := range g.pegs {
 		for ri, p := range col {
 			op := &ebiten.DrawImageOptions{}
@@ -461,7 +486,13 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	}
 
 	if g.winner > 0 {
-		ebitenutil.DebugPrint(screen, fmt.Sprintf("player %v won!", g.winner))
+		name := "red"
+		clr := color.RGBA{0xff, 0, 0, 0xff}
+		if g.winner == 1 {
+			name = "yellow"
+			clr = color.RGBA{0xff, 0xff, 0, 0xff}
+		}
+		g.message(screen, fmt.Sprintf("%v won!", name), clr)
 	}
 }
 
@@ -470,3 +501,12 @@ func (g *Game) Layout(outsideWidth, outsideHight int) (int, int) {
 }
 func (g *Game) screenWidth() int  { return g.columns * g.blockSize }
 func (g *Game) screenHeight() int { return g.rows * g.blockSize }
+
+func (g *Game) message(screen *ebiten.Image, msg string, clr color.Color) {
+	width := len(msg)*8 + 16
+	height := 16
+	x := g.screenWidth()/2 - width/2
+	vector.DrawFilledRect(screen, float32(x), 0, float32(width), float32(height), color.Black, false)
+	text.Draw(screen, msg, g.fonts["arcade"], x+8, height/2+5, clr)
+	// ebitenutil.DebugPrint(screen, msg)
+}
