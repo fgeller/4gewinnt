@@ -1,10 +1,11 @@
 package main
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"image/color"
 	"log"
-	"os"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
@@ -19,6 +20,12 @@ import (
 	"golang.org/x/image/font/opentype"
 )
 
+//go:embed click.mp3
+var clickMp3 []byte
+
+//go:embed cheer.mp3
+var cheerMp3 []byte
+
 func main() {
 	g := newGame(7, 6)
 	err := g.loadImages()
@@ -27,7 +34,7 @@ func main() {
 	}
 	err = g.loadSounds()
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("failed to load sounds err=%v\n", err)
 	}
 	err = g.loadFonts()
 	if err != nil {
@@ -125,6 +132,12 @@ func (p *peg) hasFour() ([]*peg, bool) {
 	return nil, false
 }
 
+type button struct {
+	label         string
+	x, y          int
+	width, height int
+}
+
 type Game struct {
 	pegs            [][]*peg
 	pressedTouchIDs []ebiten.TouchID
@@ -134,8 +147,12 @@ type Game struct {
 	winner       int
 	winningLine  []*peg
 
+	isStart bool
+
 	columns, rows int
 	blockSize     int
+
+	activeButton *button
 
 	images map[string]*ebiten.Image
 	sounds map[string]*audio.Player
@@ -197,7 +214,7 @@ func (g *Game) loadFonts() error {
 	arcadeFont, err := opentype.NewFace(
 		trueType,
 		&opentype.FaceOptions{
-			Size:    8,
+			Size:    14,
 			DPI:     72,
 			Hinting: font.HintingFull,
 		},
@@ -214,11 +231,7 @@ func (g *Game) loadFonts() error {
 func (g *Game) loadSounds() error {
 	audioContext := audio.NewContext(48_000)
 
-	clickFile, err := os.Open("click.mp3")
-	if err != nil {
-		return errors.Wrap(err, "failed to open click.mp3")
-	}
-	clickStream, err := mp3.DecodeWithoutResampling(clickFile)
+	clickStream, err := mp3.DecodeWithoutResampling(bytes.NewReader(clickMp3))
 	if err != nil {
 		return errors.Wrap(err, "failed to load click.mp3")
 	}
@@ -227,11 +240,7 @@ func (g *Game) loadSounds() error {
 		return errors.Wrap(err, "failed to create click player")
 	}
 
-	cheerFile, err := os.Open("cheer.mp3")
-	if err != nil {
-		return errors.Wrap(err, "failed to open cheer.mp3")
-	}
-	cheerStream, err := mp3.DecodeWithoutResampling(cheerFile)
+	cheerStream, err := mp3.DecodeWithoutResampling(bytes.NewReader(cheerMp3))
 	if err != nil {
 		return errors.Wrap(err, "failed to load cheer.mp3")
 	}
@@ -246,59 +255,59 @@ func (g *Game) loadSounds() error {
 	return nil
 }
 
-func (g *Game) Update() error {
-	leftMouseButton := ebiten.MouseButton0
-	rightMouseButton := ebiten.MouseButton2
+func (g *Game) click(x, y int) {
+	if g.isStart {
+		g.activeButton = nil
+		g.isStart = false
+	}
 
+	if g.isFinished() && g.isButtonClick(x, y) {
+		g.reset()
+		return
+	}
+
+	col, ok := g.positionToColumn(x, y)
+	if !ok {
+		col = -1
+	}
+	fmt.Printf("click x=%v y=%v col=%v\n", x, y, col)
+	p := g.addPeg(col)
+	if p != nil {
+		g.finishTurn()
+	}
+}
+
+func (g *Game) Update() error {
 	g.pressedTouchIDs = g.pressedTouchIDs[:0]
-	g.pressedTouchIDs = inpututil.AppendJustPressedTouchIDs(g.pressedTouchIDs)
+	g.pressedTouchIDs = inpututil.AppendJustReleasedTouchIDs(g.pressedTouchIDs)
 
 	for _, tid := range g.pressedTouchIDs {
-		if !inpututil.IsTouchJustReleased(tid) {
-			continue
-		}
-		touchX, touchY := inpututil.TouchPositionInPreviousTick(tid)
-		fmt.Printf("touchX=%v touchY=%v \n", touchX, touchY)
+		x, y := inpututil.TouchPositionInPreviousTick(tid)
+		g.click(x, y)
 	}
 
 	g.releasedKeys = g.releasedKeys[:0]
 	g.releasedKeys = inpututil.AppendJustReleasedKeys(g.releasedKeys)
 
-	for _, key := range g.releasedKeys {
-		fmt.Printf("key=%#v \n", key)
-	}
-
+	leftMouseButton := ebiten.MouseButton0
 	if inpututil.IsMouseButtonJustReleased(leftMouseButton) {
 		x, y := ebiten.CursorPosition()
-		col, ok := g.positionToColumn(x, y)
-		if !ok {
-			col = -1
-		}
-		fmt.Printf("left click x=%v y=%v col=%v\n", x, y, col)
-		p := g.addPeg(col)
-		if p != nil {
-			g.finishTurn()
-		}
-	}
-
-	if inpututil.IsMouseButtonJustReleased(rightMouseButton) {
-		fmt.Printf("right click\n")
-		if g.winner > 0 {
-			fmt.Printf("new game!\n")
-			g.reset()
-		}
+		g.click(x, y)
 	}
 
 	return nil
 }
 
 func (g *Game) reset() {
+	g.isStart = true
 	g.winner = 0
 	g.winningLine = []*peg{}
+	g.activeButton = nil
 	g.pegs = [][]*peg{}
 	for i := 0; i < g.columns; i++ {
 		g.pegs = append(g.pegs, make([]*peg, g.rows))
 	}
+	g.button("let's play")
 }
 
 func (g *Game) isFinished() bool {
@@ -440,6 +449,7 @@ func (g *Game) finishTurn() {
 	if ok {
 		g.winner = winner
 		g.playSound("cheer")
+		g.button("> new game")
 		return
 	}
 
@@ -485,6 +495,10 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
+	if g.activeButton != nil {
+		g.drawButton(screen)
+	}
+
 	if g.winner > 0 {
 		name := "red"
 		clr := color.RGBA{0xff, 0, 0, 0xff}
@@ -503,10 +517,69 @@ func (g *Game) screenWidth() int  { return g.columns * g.blockSize }
 func (g *Game) screenHeight() int { return g.rows * g.blockSize }
 
 func (g *Game) message(screen *ebiten.Image, msg string, clr color.Color) {
-	width := len(msg)*8 + 16
-	height := 16
+	width := len(msg)*14 + 16
+	height := 24
 	x := g.screenWidth()/2 - width/2
 	vector.DrawFilledRect(screen, float32(x), 0, float32(width), float32(height), color.Black, false)
-	text.Draw(screen, msg, g.fonts["arcade"], x+8, height/2+5, clr)
+	text.Draw(screen, msg, g.fonts["arcade"], x+10, height/2+7, clr)
 	// ebitenutil.DebugPrint(screen, msg)
+}
+
+func (g *Game) drawButton(screen *ebiten.Image) {
+	x := g.screenWidth()/2 - g.activeButton.width/2
+	y := g.screenHeight()/2 - g.activeButton.height/2
+	width := g.activeButton.width
+	height := g.activeButton.height
+	vector.DrawFilledRect(
+		screen,
+		float32(x),
+		float32(y),
+		float32(width),
+		float32(height),
+		color.Black,
+		false,
+	)
+	text.Draw(
+		screen,
+		g.activeButton.label,
+		g.fonts["arcade"],
+		x+8,
+		y+18,
+		color.RGBA{
+			0,
+			0xff,
+			0,
+			0xff,
+		},
+	)
+}
+
+func (g *Game) button(label string) {
+	width := len(label)*14 + 16
+	height := 24
+	x := g.screenWidth()/2 - width/2
+	y := g.screenHeight()/2 - height/2
+	g.activeButton = &button{
+		label:  label,
+		x:      x,
+		y:      y,
+		width:  width,
+		height: height,
+	}
+}
+
+func (g *Game) isButtonClick(x, y int) bool {
+	if g.activeButton == nil {
+		return false
+	}
+
+	bx, by, bw, bh := g.activeButton.x, g.activeButton.y, g.activeButton.width, g.activeButton.height
+	if x < bx || x > bx+bw {
+		return false
+	}
+	if y < by || y > by+bh {
+		return false
+	}
+
+	return true
 }
