@@ -138,6 +138,13 @@ type button struct {
 	width, height int
 }
 
+type message struct {
+	label         string
+	color         color.Color
+	x, y          int
+	width, height int
+}
+
 type newPeg struct {
 	p                *peg
 	screenX, screenY int
@@ -159,7 +166,8 @@ type Game struct {
 	columns, rows int
 	blockSize     int
 
-	activeButton *button
+	activeButton  *button
+	activeMessage *message
 
 	images map[string]*ebiten.Image
 	sounds map[string]*audio.Player
@@ -265,6 +273,7 @@ func (g *Game) loadSounds() error {
 func (g *Game) click(x, y int) {
 	if g.isStart {
 		g.activeButton = nil
+		g.activeMessage = nil
 		g.isStart = false
 	}
 
@@ -323,12 +332,13 @@ func (g *Game) reset() {
 	g.winner = 0
 	g.winningLine = []*peg{}
 	g.activeButton = nil
+	g.activeMessage = nil
 	g.pegs = [][]*peg{}
 	g.newPeg = nil
 	for i := 0; i < g.columns; i++ {
 		g.pegs = append(g.pegs, make([]*peg, g.rows))
 	}
-	g.button("let's play")
+	g.message("let's play", color.RGBA64{0, 0xff, 0, 0xff})
 }
 
 func (g *Game) isFinished() bool {
@@ -553,9 +563,8 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	if g.activeButton != nil {
-		g.drawButton(screen)
-	}
+	g.drawButton(screen)
+	g.drawMessage(screen)
 
 	if g.winner > 0 {
 		name := "red"
@@ -564,7 +573,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			name = "yellow"
 			clr = color.RGBA{0xff, 0xff, 0, 0xff}
 		}
-		g.message(screen, fmt.Sprintf("%v won!", name), clr)
+		g.message(fmt.Sprintf("%v won!", name), clr)
 	}
 }
 
@@ -574,41 +583,77 @@ func (g *Game) Layout(outsideWidth, outsideHight int) (int, int) {
 func (g *Game) screenWidth() int  { return g.columns * g.blockSize }
 func (g *Game) screenHeight() int { return g.rows * g.blockSize }
 
-func (g *Game) message(screen *ebiten.Image, msg string, clr color.Color) {
+func (g *Game) message(msg string, clr color.Color) {
 	width := len(msg)*14 + 16
 	height := 24
 	x := g.screenWidth()/2 - width/2
-	vector.DrawFilledRect(screen, float32(x), 0, float32(width), float32(height), color.Black, false)
-	text.Draw(screen, msg, g.fonts["arcade"], x+10, height/2+7, clr)
-	// ebitenutil.DebugPrint(screen, msg)
+	y := g.screenHeight()/2 - height/2 - height // offset from button
+	g.activeMessage = &message{
+		label:  msg,
+		color:  clr,
+		x:      x,
+		y:      y,
+		width:  width,
+		height: height,
+	}
 }
 
-func (g *Game) drawButton(screen *ebiten.Image) {
-	x := g.screenWidth()/2 - g.activeButton.width/2
-	y := g.screenHeight()/2 - g.activeButton.height/2
-	width := g.activeButton.width
-	height := g.activeButton.height
+func (g *Game) drawMessage(screen *ebiten.Image) {
+	if g.activeMessage == nil {
+		return
+	}
+	msg := g.activeMessage
+	width := msg.width
+	if g.activeButton != nil {
+		width = max(width, g.activeButton.width)
+	}
+	x := g.screenWidth()/2 - width/2
 	vector.DrawFilledRect(
 		screen,
 		float32(x),
-		float32(y),
+		float32(msg.y),
 		float32(width),
-		float32(height),
+		float32(msg.height),
 		color.Black,
 		false,
 	)
 	text.Draw(
 		screen,
-		g.activeButton.label,
+		msg.label,
 		g.fonts["arcade"],
-		x+8,
-		y+18,
-		color.RGBA{
-			0,
-			0xff,
-			0,
-			0xff,
-		},
+		msg.x+8,
+		msg.y+18,
+		color.RGBA{0xff, 0, 0xff, 0xff}, // TODO(fg)
+	)
+}
+
+func (g *Game) drawButton(screen *ebiten.Image) {
+	if g.activeButton == nil {
+		return
+	}
+
+	b := g.activeButton
+	width := b.width
+	if g.activeMessage != nil {
+		width = max(width, g.activeMessage.width)
+	}
+	x := g.screenWidth()/2 - width/2
+	vector.DrawFilledRect(
+		screen,
+		float32(x),
+		float32(b.y),
+		float32(width),
+		float32(b.height),
+		color.Black,
+		false,
+	)
+	text.Draw(
+		screen,
+		b.label,
+		g.fonts["arcade"],
+		b.x+8,
+		b.y+18,
+		color.RGBA{0, 0xff, 0, 0xff},
 	)
 }
 
