@@ -286,7 +286,6 @@ func (g *Game) click(x, y int) {
 	if !ok {
 		col = -1
 	}
-	fmt.Printf("click x=%v y=%v col=%v\n", x, y, col)
 	p := g.addPeg(col)
 	if p != nil {
 		g.newPeg = &newPeg{p: p, screenX: col * g.blockSize, screenY: 0}
@@ -338,7 +337,7 @@ func (g *Game) reset() {
 	for i := 0; i < g.columns; i++ {
 		g.pegs = append(g.pegs, make([]*peg, g.rows))
 	}
-	g.message("let's play", color.RGBA64{0, 0xff, 0, 0xff})
+	g.message("let's play", color.RGBA{0xff, 0xff, 0xff, 0xff})
 }
 
 func (g *Game) isFinished() bool {
@@ -372,13 +371,12 @@ func (g *Game) playSound(n string) {
 		fmt.Printf("unknown sound name %#v\n", n)
 		return
 	}
-	fmt.Printf("n=%v play()\n", n)
 	err := s.Rewind()
 	if err != nil {
 		fmt.Printf("error rewinding sound n=%v err=%v\n", n, err)
 		return
 	}
-	s.Play() // go p.Play() ?
+	s.Play()
 }
 
 type direction int
@@ -456,11 +454,13 @@ func (g *Game) nextPos(currentX, currentY int, d direction) (int, int, bool) {
 }
 
 func (g *Game) checkForWinner() (int, bool) {
+	pegCount := 0
 	for _, c := range g.pegs {
 		for _, p := range c {
 			if p == nil {
 				continue
 			}
+			pegCount++
 			winningLine, ok := p.hasFour()
 			if ok {
 				g.winningLine = winningLine
@@ -469,6 +469,11 @@ func (g *Game) checkForWinner() (int, bool) {
 				return g.activePlayer, true
 			}
 		}
+	}
+
+	if pegCount == g.columns*g.rows {
+		fmt.Println("draw!")
+		return 3, true
 	}
 
 	return 0, false
@@ -488,7 +493,6 @@ func (g *Game) finishTurn() {
 	} else {
 		g.activePlayer = 1
 	}
-	fmt.Printf("now it's %v's turn\n", g.activePlayer)
 }
 
 func (g *Game) positionToColumn(x, y int) (int, bool) {
@@ -567,13 +571,19 @@ func (g *Game) Draw(screen *ebiten.Image) {
 	g.drawMessage(screen)
 
 	if g.winner > 0 {
-		name := "red"
-		clr := color.RGBA{0xff, 0, 0, 0xff}
-		if g.winner == 1 {
-			name = "yellow"
+		var msg string
+		clr := color.RGBA{0xff, 0, 0xff, 0xff}
+		switch g.winner {
+		case 1:
+			msg = "yellow won!"
 			clr = color.RGBA{0xff, 0xff, 0, 0xff}
+		case 2:
+			msg = "red won!"
+			clr = color.RGBA{0xff, 0, 0, 0xff}
+		default:
+			msg = "it's a draw!"
 		}
-		g.message(fmt.Sprintf("%v won!", name), clr)
+		g.message(msg, clr)
 	}
 }
 
@@ -623,7 +633,7 @@ func (g *Game) drawMessage(screen *ebiten.Image) {
 		g.fonts["arcade"],
 		msg.x+8,
 		msg.y+18,
-		color.RGBA{0xff, 0, 0xff, 0xff}, // TODO(fg)
+		msg.color,
 	)
 }
 
