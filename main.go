@@ -138,10 +138,17 @@ type button struct {
 	width, height int
 }
 
+type newPeg struct {
+	p                *peg
+	screenX, screenY int
+}
+
 type Game struct {
 	pegs            [][]*peg
 	pressedTouchIDs []ebiten.TouchID
 	releasedKeys    []ebiten.Key
+
+	newPeg *newPeg
 
 	activePlayer int
 	winner       int
@@ -216,7 +223,7 @@ func (g *Game) loadFonts() error {
 		&opentype.FaceOptions{
 			Size:    14,
 			DPI:     72,
-			Hinting: font.HintingFull,
+			Hinting: font.HintingNone,
 		},
 	)
 	if err != nil {
@@ -273,6 +280,7 @@ func (g *Game) click(x, y int) {
 	fmt.Printf("click x=%v y=%v col=%v\n", x, y, col)
 	p := g.addPeg(col)
 	if p != nil {
+		g.newPeg = &newPeg{p: p, screenX: col * g.blockSize, screenY: 0}
 		g.finishTurn()
 	}
 }
@@ -295,6 +303,18 @@ func (g *Game) Update() error {
 		g.click(x, y)
 	}
 
+	// 60 tps
+	if g.newPeg != nil {
+		maxY := g.newPeg.p.y * g.blockSize
+		if g.newPeg.screenY == maxY {
+			g.newPeg = nil
+			g.playSound("click")
+		} else {
+			next := g.newPeg.screenY + 15
+			g.newPeg.screenY = min(next, maxY)
+		}
+	}
+
 	return nil
 }
 
@@ -304,6 +324,7 @@ func (g *Game) reset() {
 	g.winningLine = []*peg{}
 	g.activeButton = nil
 	g.pegs = [][]*peg{}
+	g.newPeg = nil
 	for i := 0; i < g.columns; i++ {
 		g.pegs = append(g.pegs, make([]*peg, g.rows))
 	}
@@ -326,7 +347,6 @@ func (g *Game) addPeg(column int) *peg {
 	rows := g.pegs[column]
 	for i := len(rows) - 1; i >= 0; i-- {
 		if rows[i] == nil {
-			g.playSound("click")
 			p := &peg{g: g, player: g.activePlayer, x: column, y: i}
 			rows[i] = p
 			return p
@@ -473,16 +493,54 @@ func (g *Game) positionToColumn(x, y int) (int, bool) {
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
+	vector.DrawFilledRect(screen, 0, 0, float32(g.screenWidth()), float32(g.screenHeight()), color.White, false)
+
+	// animated peg
+
+	if g.newPeg != nil {
+		p := g.newPeg.p
+		op := &ebiten.DrawImageOptions{}
+		x := g.newPeg.screenX
+		y := g.newPeg.screenY
+		op.GeoM.Translate(float64(x), float64(y))
+		switch {
+		case p.player == 1:
+			screen.DrawImage(g.images["yellow"], op)
+		case p.player == 2:
+			screen.DrawImage(g.images["red"], op)
+		default:
+			panic("asihoetnasiohetn")
+		}
+	}
+
+	// grid
+
+	for ci, col := range g.pegs {
+		for ri := range col {
+			op := &ebiten.DrawImageOptions{}
+			x := ci * g.blockSize
+			y := ri * g.blockSize
+			op.GeoM.Translate(float64(x), float64(y))
+			screen.DrawImage(g.images["empty"], op)
+		}
+	}
+
+	// set pegs
 	for ci, col := range g.pegs {
 		for ri, p := range col {
+			if p == nil {
+				continue
+			}
+			if g.newPeg != nil && g.newPeg.p.x == p.x && g.newPeg.p.y == p.y {
+				continue
+			}
+
 			op := &ebiten.DrawImageOptions{}
-			x := ci * 90
-			y := ri * 90
+			x := ci * g.blockSize
+			y := ri * g.blockSize
 			op.GeoM.Translate(float64(x), float64(y))
 
 			switch {
-			case p == nil:
-				screen.DrawImage(g.images["empty"], op)
 			case len(g.winningLine) > 0 && p.isIn(g.winningLine):
 				screen.DrawImage(g.images["pink"], op)
 			case p.player == 1:
