@@ -93,7 +93,7 @@ func (p *peg) hasFour() ([]*peg, bool) {
 	checkLine := func(directionA, directionB direction) ([]*peg, bool) {
 		streak := []*peg{p}
 		next := p
-		for i := 0; i < 4; i++ {
+		for {
 			next = next.neighbor(directionA)
 			if next == nil || next.player != p.player {
 				break
@@ -101,7 +101,7 @@ func (p *peg) hasFour() ([]*peg, bool) {
 			streak = append(streak, next)
 		}
 		next = p
-		for i := 0; i < 4; i++ {
+		for {
 			next = next.neighbor(directionB)
 			if next == nil || next.player != p.player {
 				break
