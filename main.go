@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"math/rand"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/audio"
@@ -71,6 +72,7 @@ func (p *peg) String() string {
 	return fmt.Sprintf("peg{x=%v y=%v player=%v}", p.x, p.y, p.player)
 }
 
+// move to streak?
 func (p *peg) isIn(others []*peg) bool {
 	for _, o := range others {
 		if o.x == p.x && o.y == p.y {
@@ -88,17 +90,30 @@ func (p *peg) neighbor(d direction) *peg {
 	return p.g.pegs[nextX][nextY]
 }
 
-func (p *peg) hasFour() ([]*peg, bool) {
-	var maxStreak []*peg
-	checkLine := func(directionA, directionB direction) ([]*peg, bool) {
-		streak := []*peg{p}
+func (p *peg) hasFour() (*streak, bool) {
+	var maxStreak *streak
+	checkLine := func(directionA, directionB direction) (*streak, bool) {
+		var orientation lineOrientation
+		if directionA == North && directionB == South {
+			orientation = Vertical
+		} else if directionA == West && directionB == East {
+			orientation = Horizontal
+		} else if directionA == NorthWest && directionB == SouthEast {
+			orientation = Backslash
+		} else if directionA == SouthWest && directionB == NorthEast {
+			orientation = Slash
+		} else {
+			panic("unsupported directions")
+		}
+
+		ps := []*peg{p}
 		next := p
 		for {
 			next = next.neighbor(directionA)
 			if next == nil || next.player != p.player {
 				break
 			}
-			streak = append(streak, next)
+			ps = append(ps, next)
 		}
 		next = p
 		for {
@@ -106,22 +121,20 @@ func (p *peg) hasFour() ([]*peg, bool) {
 			if next == nil || next.player != p.player {
 				break
 			}
-			streak = append(streak, next)
+			ps = append(ps, next)
 		}
 
-		if len(streak) > len(maxStreak) {
-			maxStreak = streak
+		if len(ps) > maxStreak.len() {
+			maxStreak = newStreak(orientation, ps)
 		}
-		return streak, len(streak) >= 4
+
+		return newStreak(orientation, ps), len(ps) >= 4
 	}
 
-	// \
-	line, ok := checkLine(NorthWest, SouthEast)
-	if ok {
-		return line, ok
-	}
-	// /
-	line, ok = checkLine(SouthWest, NorthEast)
+	var line *streak
+	var ok bool
+	// |
+	line, ok = checkLine(North, South)
 	if ok {
 		return line, ok
 	}
@@ -130,8 +143,13 @@ func (p *peg) hasFour() ([]*peg, bool) {
 	if ok {
 		return line, ok
 	}
-	// |
-	line, ok = checkLine(North, South)
+	// \
+	line, ok = checkLine(NorthWest, SouthEast)
+	if ok {
+		return line, ok
+	}
+	// /
+	line, ok = checkLine(SouthWest, NorthEast)
 	if ok {
 		return line, ok
 	}
@@ -143,6 +161,7 @@ type button struct {
 	label         string
 	x, y          int
 	width, height int
+	action        func()
 }
 
 type message struct {
@@ -166,15 +185,17 @@ type Game struct {
 
 	activePlayer int
 	winner       int
-	winningLine  []*peg
+	winningLine  *streak
 	uhohCount    int
+
+	bot bool
 
 	isStart bool
 
 	columns, rows int
 	blockSize     int
 
-	activeButton  *button
+	activeButtons []*button
 	activeMessage *message
 
 	images map[string]*ebiten.Image
@@ -289,14 +310,16 @@ func (g *Game) loadSounds() error {
 }
 
 func (g *Game) click(x, y int) {
+	fmt.Printf("click: x=%v y=%v activePlayer=%v\n", x, y, g.activePlayer)
 	if g.isStart {
-		g.activeButton = nil
+		g.activeButtons = nil
 		g.activeMessage = nil
 		g.isStart = false
 	}
 
-	if g.isFinished() && g.isButtonClick(x, y) {
-		g.reset()
+	b := g.isButtonClick(x, y)
+	if b != nil {
+		b.action()
 		return
 	}
 
@@ -345,11 +368,13 @@ func (g *Game) Update() error {
 }
 
 func (g *Game) reset() {
+	g.activePlayer = 1
+	g.bot = true
 	g.isStart = true
 	g.winner = 0
-	g.winningLine = []*peg{}
+	g.winningLine = nil
 	g.uhohCount = 0
-	g.activeButton = nil
+	g.activeButtons = nil
 	g.activeMessage = nil
 	g.pegs = [][]*peg{}
 	g.newPeg = nil
@@ -397,6 +422,15 @@ func (g *Game) playSound(n string) {
 	}
 	s.Play()
 }
+
+type lineOrientation int
+
+const (
+	Horizontal = iota
+	Vertical   // |
+	Slash      // /
+	Backslash  // \
+)
 
 type direction int
 
@@ -485,11 +519,11 @@ func (g *Game) checkForWinner() (int, bool) {
 			if ok {
 				g.winningLine = streak
 				fmt.Printf("found winning line, player %v won\n", g.activePlayer)
-				printLine(g.winningLine)
+				printLine(g.winningLine.pegs)
 				return g.activePlayer, true
 			}
 
-			if len(streak) == 3 {
+			if streak.len() == 3 {
 				uhohCount += 1
 			}
 		}
@@ -513,7 +547,20 @@ func (g *Game) finishTurn() {
 	if ok {
 		g.winner = winner
 		g.playSound("cheer")
-		g.button("> new game")
+		g.setButtons(map[string]func(){
+			"> 2p game": func() {
+				if g.isFinished() {
+					g.bot = false
+					g.reset()
+				}
+			},
+			"> 1p game": func() {
+				if g.isFinished() {
+					g.bot = true
+					g.reset()
+				}
+			},
+		})
 		return
 	}
 
@@ -522,6 +569,215 @@ func (g *Game) finishTurn() {
 	} else {
 		g.activePlayer = 1
 	}
+
+	if !g.bot {
+		return
+	}
+
+	if g.activePlayer == 2 {
+		col := g.pickNextColumn()
+		g.click(col*g.blockSize, 1)
+	}
+}
+
+// line?
+type streak struct {
+	pegs        []*peg
+	orientation lineOrientation
+}
+
+func newStreak(orientation lineOrientation, pegs []*peg) *streak {
+	return &streak{
+		pegs:        pegs,
+		orientation: orientation,
+	}
+}
+
+func (s *streak) String() string {
+	if s == nil {
+		return "nil"
+	}
+	str := "streak{"
+	str += "orientation: "
+	switch s.orientation {
+	case Horizontal:
+		str += "horizontal"
+	case Vertical:
+		str += "vertical"
+	case Slash:
+		str += "slash"
+	case Backslash:
+		str += "backslash"
+	}
+	str += ", pegs={"
+	for i, p := range s.pegs {
+		str += p.String()
+		if i < len(s.pegs)-1 {
+			str += ", "
+		}
+	}
+	str += "}"
+	str += "}"
+	return str
+}
+
+func (s *streak) len() int {
+	if s == nil {
+		return 0
+	}
+	return len(s.pegs)
+}
+
+func (s *streak) highestPeg() *peg {
+	hp := s.pegs[0]
+	for _, p := range s.pegs {
+		if p.y < hp.y {
+			hp = p
+		}
+	}
+	return hp
+}
+
+func (s *streak) leftMostPeg() *peg {
+	lp := s.pegs[0]
+	for _, p := range s.pegs {
+		if p.x < lp.x {
+			lp = p
+		}
+	}
+	return lp
+}
+
+func (s *streak) rightMostPeg() *peg {
+	lp := s.pegs[0]
+	for _, p := range s.pegs {
+		if p.x > lp.x {
+			lp = p
+		}
+	}
+	return lp
+}
+
+func (g *Game) connectingMoves(streaks []*streak) []int {
+	mvs := []int{}
+	for _, s := range streaks {
+		switch s.orientation {
+		case Vertical:
+			hp := s.highestPeg()
+			if hp.y == 0 {
+				continue
+			}
+			if g.pegs[hp.x][hp.y-1] == nil {
+				mvs = append(mvs, hp.x)
+			}
+		case Horizontal:
+			lp := s.leftMostPeg()
+			if g.positionPlayable(lp.x-1, lp.y) {
+				mvs = append(mvs, lp.x-1)
+			}
+			rp := s.rightMostPeg()
+			if g.positionPlayable(rp.x+1, lp.y) {
+				mvs = append(mvs, rp.x+1)
+			}
+		case Slash:
+			lp := s.leftMostPeg()
+			if g.positionPlayable(lp.x-1, lp.y+1) {
+				mvs = append(mvs, lp.x-1)
+			}
+			rp := s.rightMostPeg()
+			if g.positionPlayable(rp.x+1, rp.y-1) {
+				mvs = append(mvs, rp.x+1)
+			}
+		case Backslash:
+			lp := s.leftMostPeg()
+			if g.positionPlayable(lp.x-1, lp.y-1) {
+				mvs = append(mvs, lp.x-1)
+			}
+			rp := s.rightMostPeg()
+			if g.positionPlayable(rp.x+1, rp.y+1) {
+				mvs = append(mvs, rp.x+1)
+			}
+		default:
+			panic("unknown orientation")
+		}
+	}
+	return mvs
+}
+
+func (g *Game) positionPlayable(x, y int) bool {
+	if y < 0 || y >= g.rows { // out of bounds
+		return false
+	}
+	if x < 0 || x >= g.columns { // out of bounds
+		return false
+	}
+	if g.pegs[x][y] != nil { // already played
+		return false
+	}
+	if y == g.rows-1 { // bottom
+		return true
+	}
+	if g.pegs[x][y+1] != nil { // below is played
+		return true
+	}
+	return false
+}
+
+func (g *Game) pickNextColumn() int {
+	randomColumn := rand.Int() % g.columns
+
+	maxOwnLen := 0
+	longestOwnStreaks := []*streak{}
+	maxOpponentLen := 0
+	longestOpponentStreaks := []*streak{}
+	for _, c := range g.pegs {
+		for _, p := range c {
+			if p == nil {
+				continue
+			}
+			strk, _ := p.hasFour()
+			if p.player == g.activePlayer {
+				if strk.len() > maxOwnLen {
+					longestOwnStreaks = []*streak{strk}
+					maxOwnLen = strk.len()
+				} else if strk.len() == maxOwnLen {
+					longestOwnStreaks = append(longestOwnStreaks, strk)
+				}
+			} else {
+				if strk.len() > maxOpponentLen {
+					longestOpponentStreaks = []*streak{strk}
+					maxOpponentLen = strk.len()
+				} else if strk.len() == maxOpponentLen {
+					longestOpponentStreaks = append(longestOpponentStreaks, strk)
+				}
+			}
+		}
+	}
+
+	ownConnecting := g.connectingMoves(longestOwnStreaks)
+	opponentConnecting := g.connectingMoves(longestOpponentStreaks)
+
+	if rand.Int()%6 == 0 {
+		fmt.Printf("chaos monkey 🐒\n")
+		return randomColumn
+	}
+
+	mvs := []int{}
+	if len(ownConnecting) == 3 {
+		return ownConnecting[0]
+	}
+	mvs = append(ownConnecting)
+	if len(opponentConnecting) == 3 {
+		return opponentConnecting[0]
+	}
+	mvs = append(opponentConnecting)
+
+	if len(mvs) == 0 {
+		fmt.Printf("choosing random column %v\n", randomColumn)
+		return randomColumn
+	}
+	ri := rand.Int() % len(mvs)
+	return mvs[ri]
 }
 
 func (g *Game) positionToColumn(x, y int) (int, bool) {
@@ -584,7 +840,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 			op.GeoM.Translate(float64(x), float64(y))
 
 			switch {
-			case len(g.winningLine) > 0 && p.isIn(g.winningLine):
+			case g.winningLine.len() > 0 && p.isIn(g.winningLine.pegs):
 				screen.DrawImage(g.images["pink"], op)
 			case p.player == 1:
 				screen.DrawImage(g.images["yellow"], op)
@@ -596,7 +852,7 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		}
 	}
 
-	g.drawButton(screen)
+	g.drawButtons(screen)
 	g.drawMessage(screen)
 
 	if g.winner > 0 {
@@ -643,8 +899,10 @@ func (g *Game) drawMessage(screen *ebiten.Image) {
 	}
 	msg := g.activeMessage
 	width := msg.width
-	if g.activeButton != nil {
-		width = max(width, g.activeButton.width)
+	if g.activeButtons != nil {
+		for _, ab := range g.activeButtons {
+			width = max(width, ab.width)
+		}
 	}
 	x := g.screenWidth()/2 - width/2
 	vector.DrawFilledRect(
@@ -666,62 +924,64 @@ func (g *Game) drawMessage(screen *ebiten.Image) {
 	)
 }
 
-func (g *Game) drawButton(screen *ebiten.Image) {
-	if g.activeButton == nil {
-		return
-	}
-
-	b := g.activeButton
-	width := b.width
-	if g.activeMessage != nil {
-		width = max(width, g.activeMessage.width)
-	}
-	x := g.screenWidth()/2 - width/2
-	vector.DrawFilledRect(
-		screen,
-		float32(x),
-		float32(b.y),
-		float32(width),
-		float32(b.height),
-		color.Black,
-		false,
-	)
-	text.Draw(
-		screen,
-		b.label,
-		g.fonts["arcade"],
-		b.x+8,
-		b.y+18,
-		color.RGBA{0, 0xff, 0, 0xff},
-	)
-}
-
-func (g *Game) button(label string) {
-	width := len(label)*14 + 16
-	height := 24
-	x := g.screenWidth()/2 - width/2
-	y := g.screenHeight()/2 - height/2
-	g.activeButton = &button{
-		label:  label,
-		x:      x,
-		y:      y,
-		width:  width,
-		height: height,
+func (g *Game) drawButtons(screen *ebiten.Image) {
+	for _, b := range g.activeButtons {
+		width := b.width
+		if g.activeMessage != nil {
+			width = max(width, g.activeMessage.width)
+		}
+		x := g.screenWidth()/2 - width/2
+		vector.DrawFilledRect(
+			screen,
+			float32(x),
+			float32(b.y),
+			float32(width),
+			float32(b.height),
+			color.Black,
+			false,
+		)
+		text.Draw(
+			screen,
+			b.label,
+			g.fonts["arcade"],
+			b.x+8,
+			b.y+18,
+			color.RGBA{0, 0xff, 0, 0xff},
+		)
 	}
 }
 
-func (g *Game) isButtonClick(x, y int) bool {
-	if g.activeButton == nil {
-		return false
+func (g *Game) setButtons(actions map[string]func()) {
+	yOffset := 0
+	g.activeButtons = []*button{}
+	for label, action := range actions {
+		width := len(label)*14 + 16
+		height := 24
+		x := g.screenWidth()/2 - width/2
+		y := g.screenHeight()/2 - height/2 + yOffset
+		g.activeButtons = append(
+			g.activeButtons,
+			&button{
+				label:  label,
+				x:      x,
+				y:      y,
+				width:  width,
+				height: height,
+				action: action,
+			},
+		)
+		yOffset += height
+	}
+}
+
+func (g *Game) isButtonClick(x, y int) *button {
+	for _, ab := range g.activeButtons {
+		bx, by, bw, bh := ab.x, ab.y, ab.width, ab.height
+		if x >= bx && x <= bx+bw &&
+			y >= by && y <= by+bh {
+			return ab
+		}
 	}
 
-	bx, by, bw, bh := g.activeButton.x, g.activeButton.y, g.activeButton.width, g.activeButton.height
-	if x < bx || x > bx+bw {
-		return false
-	}
-	if y < by || y > by+bh {
-		return false
-	}
-
-	return true
+	return nil
 }
